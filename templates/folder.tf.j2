@@ -1,0 +1,3 @@
+resource "grafana_folder" "{{ folder.name | lower | replace(" -", "_") }}" {
+  title = "{{ folder.name }}"
+}

@@ -1,0 +1,244 @@
+grafana:
+  url: "https://grafana.example.com"
+  auth: "username:password"
+
+datasources:
+  - name: Prometheus
+    url: http://prometheus-server:9090
+    type: prometheus
+  - name: VictoriaLogs
+    url: http://vlcluster-vlselect:9471/
+    type: victoriametrics-logs-datasource
+
+dashboards:
+  - name: node-exporter
+    # Known issue, not yet pushed to grafana repo:
+    # https://github.com/rfmoz/grafana-dashboards/pull/191
+    # https://github.com/rfmoz/grafana-dashboards/issues/195
+    #url: "https://grafana.com/api/dashboards/1860/revisions/41/download"
+    url: https://raw.githubusercontent.com/rfmoz/grafana-dashboards/refs/heads/master/prometheus/node-exporter-full.json
+    mode: http
+    folder: Defaults
+  - name: kube-global
+    mode: http
+    url: "https://grafana.com/api/dashboards/15757/revisions/43/download"
+    folder: Defaults
+  - name: kube-pods
+    mode: http
+    url: "https://grafana.com/api/dashboards/15760/revisions/36/download"
+    folder: Defaults
+  - name: longhorn
+    mode: http
+    url: "https://grafana.com/api/dashboards/16888/revisions/9/download"
+    folder: Defaults
+  - name: nginx-ingress
+    mode: http
+    url: "https://raw.githubusercontent.com/kubernetes/ingress-nginx/refs/heads/main/deploy/grafana/dashboards/nginx.json"
+    folder: Defaults
+  - name: vmcluster
+    mode: http
+    url: "https://grafana.com/api/dashboards/11176/revisions/41/download"
+    folder: Defaults
+  - name: kube-logs
+    folder: Defaults
+    template:
+      DS_PROMETHEUS: Prometheus
+      DS_VICTORIALOGS: VictoriaLogs
+  - name: alerts
+    folder: Alerts
+    template:
+      folder: Alerts
+
+folders:
+  - name: Alerts
+  - name: Defaults
+
+contacts:
+  - name: Default
+    type: slack
+    slack:
+      url: https://framateam.org/hooks/fqeggy8mb3r3pqskw951suhrdo
+      username: Grafana Alerts
+      mention_channel: "here"
+
+alerts:
+  - name: node_exporter_capacity
+    interval_seconds: 60
+    for: 15m
+    folder: Alerts
+    datasource: Prometheus
+    contact: Default
+    rules:
+      - name: High CPU Load
+        expr: |
+          max(
+            node_load1 / count(node_cpu_seconds_total{mode="idle"})
+          ) by (instance)
+        condition: gt
+        value: 0.9
+        vector: range
+      - name: High Memory Usage
+        expr: |
+          max(
+            1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes
+          ) by (instance)
+        condition: gt
+        value: 0.8
+        vector: range
+      - name: High Disk Usage
+        expr: |
+          (
+            node_filesystem_size_bytes{device!~"rootfs|tmpfs|shm"}
+            - node_filesystem_avail_bytes{device!~"rootfs|tmpfs|shm"}
+          ) / node_filesystem_size_bytes{device!~"rootfs|tmpfs|shm"}
+        condition: gt
+        value: 0.9
+        vector: range
+  - name: systemd_status
+    interval_seconds: 60
+    for: 3m
+    folder: Alerts
+    datasource: Prometheus
+    contact: Default
+    rules:
+      - name: Systemd Unit Failed
+        expr: max(node_systemd_unit_state{state="failed"}) by (instance, name)
+        condition: gt
+        value: 0.0
+  - name: node_up
+    interval_seconds: 60
+    for: 3m
+    folder: Alerts
+    datasource: Prometheus
+    noDataState: "OK"
+    contact: Default
+    rules:
+      - name: No Data From Node
+        expr: |
+          group by (instance) (
+            present_over_time(node_cpu_seconds_total{mode="idle"}[72h]
+          ) unless node_cpu_seconds_total{mode="idle"})
+        condition: gt
+        value: 0.0
+  - name: kube_state_metrics
+    interval_seconds: 60
+    for: 5m
+    folder: Alerts
+    datasource: Prometheus
+    noDataState: "OK"
+    contact: Default
+    rules:
+      - name: Kubernetes pod failed/unknown
+        expr: kube_pod_status_phase{phase=~"Failed|Unknown"} > 0
+        condition: gt
+        value: 0.0
+      - name: Kubernetes pod pending
+        expr: |
+          kube_pod_status_phase{phase="Pending"} offset 5m > 0
+          and kube_pod_status_phase{phase="Pending"} > 0
+        condition: gt
+        value: 0.0
+      - name: Kubernetes Deployment stuck
+        expr: |
+          kube_deployment_status_condition{
+            condition="Progressing",
+            status=~"false|unknown"
+          } offset 5m > 0 and
+          kube_deployment_status_condition{
+            condition="Progressing",
+            status=~"false|unknown"
+          } > 0
+        condition: gt
+        value: 0.0
+      - name: Kubernetes Deployment replicas mismatch
+        expr: |
+          (kube_deployment_spec_replicas -
+          kube_deployment_status_replicas_available) > 0
+        condition: gt
+        value: 0.0
+      - name: Node not ready
+        expr: |
+          kube_node_status_condition{
+            condition="Ready", status=~"false|unknown"
+          } > 0
+        condition: gt
+        value: 0.0
+      - name: Node Disk Pressure
+        expr: |
+          kube_node_status_condition{
+            condition="DiskPressure", status=~"true|unknown"
+          } > 0
+        condition: gt
+        value: 0.0
+      - name: Node Memory Pressure
+        expr: |
+          kube_node_status_condition{
+            condition="MemoryPressure", status=~"true|unknown"
+          } > 0
+        condition: gt
+        value: 0.0
+      - name: Node Network Unavailable
+        expr: |
+          kube_node_status_condition{
+            condition="NetworkUnavailable", status=~"true|unknown"
+          } > 0
+        condition: gt
+        value: 0.0
+      - name: Node PID Pressure
+        expr: |
+          kube_node_status_condition{
+            condition="PIDPressure", status=~"true|unknown"
+          } > 0
+        condition: gt
+        value: 0.0
+      - name: Namespace Quota
+        expr: |
+          (kube_resourcequota{type="used"} /
+          kube_resourcequota{type="hard"}) > 0.9
+        condition: gt
+        value: 0.0
+      - name: Job Failed
+        expr: |
+          kube_job_failed{condition="false|unknown"} > 0
+        condition: gt
+        value: 0.0
+  - name: longhorn
+    interval_seconds: 60
+    for: 5m
+    folder: Alerts
+    datasource: Prometheus
+    noDataState: "OK"
+    contact: Default
+    rules:
+      - name: Longhorn Node not Ready
+        expr: longhorn_node_status{condition="ready"} == 0
+        condition: lt
+        value: 1.0
+      - name: Longhorn Disk not ready
+        expr: longhorn_disk_status{condition="ready"} == 0
+        condition: lt
+        value: 1.0
+      - name: Longhorn Disk not schedulable
+        expr: longhorn_disk_status{condition="schedulable"} == 0
+        condition: lt
+        value: 1.0
+      - name: Longhorn Volume not replicated
+        expr: sum(longhorn_engine_replica_mode) by (volume)
+        condition: lt
+        value: 2.0
+      - name: Longhorn Volume in error
+        expr: longhorn_engine_state{state="error"} > 0
+        condition: gt
+        value: 0.0
+      - name: Longhorn Disk usage too high
+        expr: (longhorn_disk_usage_bytes / longhorn_disk_capacity_bytes)
+        condition: gt
+        value: 0.9
+      - name: Longhorn Node disk usage too high
+        expr: (longhorn_node_storage_usage_bytes / longhorn_node_storage_capacity_bytes)
+        condition: gt
+        value: 0.9
+      - name: Longhorn Volume is almost full
+        expr: longhorn_volume_actual_size_bytes / longhorn_volume_capacity_bytes
+        condition: gt
+        value: 0.8

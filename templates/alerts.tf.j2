@@ -1,0 +1,135 @@
+resource "grafana_rule_group" "{{ group.name | lower | replace('-', '_') }}" {
+  org_id           = {{ group.orgId }}
+  name             = "{{ group.name }}"
+  folder_uid       = grafana_folder.{{ group.folder | lower | replace('-', '_') }}.uid
+  interval_seconds = {{ group.interval_seconds }}
+
+  {% for rule in group.rules %}
+  rule {
+    name      = "{{ rule.name }}"
+    condition = "C"
+
+    data {
+      ref_id = "A"
+
+      relative_time_range {
+        from = {{ group.interval_seconds * 60 }}
+        to   = 0
+      }
+
+      datasource_uid = grafana_data_source.{{ group.datasource | lower | replace('-', '_') }}.uid
+      model = jsonencode({
+        datasource = {
+          type = "prometheus"
+          uid = grafana_data_source.{{ group.datasource | lower | replace('-', '_') }}.uid
+        }
+        expr = {{ rule.expr | tojson }}
+        {% if rule.vector == "range" %}
+        instant = false
+        range = true
+        {% else %}
+        instant = true
+        range = false
+        {% endif %}
+        refId = "A"
+      })
+    }
+    {% if rule.vector == "range" %}
+    data {
+      ref_id     = "reducer"
+      query_type = "expression"
+
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+
+      datasource_uid = "__expr__"
+      model = jsonencode({
+        conditions = [{
+            evaluator = {
+                params = [0, 0]
+                type = "{{ rule.condition }}"
+            },
+            operator = {
+                type = "and"
+            },
+            query = {
+                params = []
+            },
+            reducer = {
+                params = []
+                type = "avg"
+            },
+            type = "query"
+        }]
+        datasource = {
+            type = "__expr__"
+            uid = "__expr__"
+        }
+        expression = "A"
+        intervalMs = 15000
+        maxDataPoints = 43200
+        reducer = "last"
+        refId = "reducer"
+        type = "reduce"
+      })
+    }
+    {% endif %}
+    data {
+      ref_id = "C"
+      relative_time_range {
+        from = 0
+        to   = 0
+      }
+      datasource_uid = "__expr__"
+      model = jsonencode({
+        conditions = [{
+            evaluator = {
+                params = [{{ rule.value }}]
+                type = "{{ rule.condition }}"
+            },
+            operator = {
+                type = "and"
+            },
+            query = {
+                params = ["C"]
+            },
+            reducer = {
+                params = []
+                type = "last"
+            },
+            type = "query"
+        }]
+        datasource = {
+            type = "__expr__"
+            uid = "__expr__"
+        }
+        {% if rule.vector == "range" %}
+        expression = "reducer"
+        {% else %}
+        expression = "A"
+        {% endif %}
+        intervalMs = 15000
+        maxDataPoints = 43200
+        refId = "C"
+        type = "threshold"
+      })
+    }
+
+    no_data_state  = "{{ group.noDataState | default("NoData", true) }}"
+    exec_err_state = "Error"
+    for            = "{{ group.for }}"
+    annotations = {
+      summary          = "{{ rule.name }}"
+    }
+    is_paused = false
+    notification_settings {
+      contact_point = "{{ group.contact }}"
+      group_by      = null
+      mute_timings  = null
+    }
+  }
+  {% endfor %}
+}
+

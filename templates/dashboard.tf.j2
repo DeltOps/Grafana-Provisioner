@@ -1,0 +1,15 @@
+resource "grafana_dashboard" "{{ dash.name | lower | replace('-', '_') }}" {
+  {% if dash.folder %}
+  folder = grafana_folder.{{ dash.folder | lower | replace(' -', '_')}}.uid
+  {% endif %}
+  {% if dash.orgId %}
+  org_id = {{ dash.orgId }}
+  {% endif %}
+  {% if dash.json %}
+  config_json = <<-EOF
+  {{ dash.json | indent(width=2) }}
+  EOF
+  {% else %}
+  config_json = file("{{ dash.path }}")
+  {% endif %}
+}

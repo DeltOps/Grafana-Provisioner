@@ -1,0 +1,5 @@
+resource "grafana_data_source" "{{ ds.name | lower | replace('-', '_') }}" {
+  name = "{{ ds.name }}"
+  type = "{{ ds.type }}"
+  url  = "{{ ds.url }}"
+}

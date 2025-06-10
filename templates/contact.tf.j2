@@ -1,0 +1,13 @@
+resource "grafana_contact_point" "{{ contact.name | lower | replace('-', '_') }}" {
+  name = "{{ contact.name }}"
+  {% if contact.type == "slack" %}
+  slack {
+    disable_resolve_message = {{ contact.disable_resolve_message | default("false", true) }}
+    url = "{{ contact.slack.url }}"
+    username = "{{ contact.slack.username | default('') }}"
+    mention_channel = "{{ contact.slack.mention_channel | default('') }}"
+    mention_groups = "{{ contact.slack.mention_groups | default([]) | join(',') }}"
+    mention_users = "{{ contact.slack.mention_users | default([]) | join(',') }}"
+  }
+  {% endif %}
+}

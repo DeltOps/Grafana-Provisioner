@@ -1,0 +1,4 @@
+generated.tf
+terraform.tfstate*
+dashboards/*.json
+

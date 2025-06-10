@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+
+import yaml
+from jinja2 import Environment, FileSystemLoader, Template
+import os
+import sys
+import requests
+
+def log_error(msg):
+    print("ERROR: " + msg)
+
+# Load YAML configuration
+def load_config(yaml_file):
+    if not os.path.exists(yaml_file):
+        print(yaml_file + " does not exists")
+        exit(1)
+
+    with open(yaml_file, 'r') as f:
+        try:
+            return yaml.safe_load(f)
+        except yaml.scanner.ScannerError:
+            print(yaml_file + " is not a proper yaml file")
+            exit(1)
+
+def verify_datasource(ds):
+    required = [
+            ("name", str),
+            ("type", str),
+            ("url", str)
+    ]
+    check_required("datasource", ds, required)
+
+def verify_dashboard(db, config):
+    required = [("name", str)]
+    if db.get("mode", "") == "":
+        db["mode"] = "local"
+    if db["mode"] not in ["local", "http"]:
+        log_error("Unexpected dashboard mode " + db["mode"])
+        exit(1)
+    if db["mode"] == "http":
+        required.append(("url", str))
+
+    if db.get("folder"):
+        if not folder_exists(db["folder"], config):
+            log_error("Folder " + db["folder"] + " is not declared")
+            exit(1)
+
+    check_required("dashboard", db, required)
+
+def verify_folder(folder):
+    required = [("name", str)]
+    check_required("folder", folder, required)
+
+def verify_contact_point(contact):
+    required = [("name", str), ("type", str)]
+    check_required("contact point", contact, required)
+
+def verify_alertgroup(group, config):
+    required = [
+            ("name", str),
+            ("interval_seconds", int),
+            ("for", str),
+            ("folder", str),
+            ("datasource", str),
+            ("contact", str),
+            ("rules", list)
+    ]
+    check_required("alertgroup", group, required)
+    if group.get("orgId", "") == "":
+        group["orgId"] = 1
+
+    if not folder_exists(group["folder"], config):
+        log_error("Folder " + group["folder"] + " is not declared")
+        exit(1)
+
+    if not datasource_exists(group["datasource"], config):
+        log_error("Datasource " + group["datasource"] + " is not declared")
+        exit(1)
+
+    if not contact_exists(group["contact"], config):
+        log_error("Contact " + group["contact"] + " is not declared")
+        exit(1)
+
+    for rule in group['rules']:
+        verify_rule(rule)
+
+    check_uniq_name(group, "rules")
+
+def verify_rule(rule):
+    required = [
+            ("name", str),
+            ("expr", str),
+            ("condition", str),
+            ("value", float)
+    ]
+    check_required("rule", rule, required)
+
+def folder_exists(foldername, config):
+    for folder in config.get("folders", []):
+        if foldername == folder.get("name"):
+            return True
+    return False
+
+def datasource_exists(datasource, config):
+    for ds in config.get("datasources", []):
+        if datasource == ds.get("name"):
+            return True
+    return False
+
+def contact_exists(contact, config):
+    for c in config.get("contacts", []):
+        if contact == c.get("name"):
+            return True
+    return False
+
+def check_uniq_name(config, key):
+    names = []
+    for item in config.get(key, []):
+        if item["name"] in names:
+            log_error("Two or more " + key + " can't have the same name")
+            exit(1)
+
+def check_required(datatype, datadict, required):
+    for key,keytype in required:
+        if datadict.get(key, "") == "":
+            log_error(datatype + " has no " + key)
+            exit(1)
+        if not isinstance(datadict[key], keytype):
+            log_error(datatype + "'s " + key + " should be of type " + keytype.__name__ + ". Found " + type(datadict[key]).__name__)
+            exit(1)
+
+def verify_config(config):
+    for ds in config.get('datasources', []):
+        verify_datasource(ds)
+
+    for db in config.get('dashboards', []):
+        verify_dashboard(db, config)
+
+    for folder in config.get('folders', []):
+        verify_folder(folder)
+
+    for contact in config.get('contacts', []):
+        verify_contact_point(contact)
+
+    for alert_group in config.get('alerts', []):
+        verify_alertgroup(alert_group, config)
+
+    check_uniq_name(config, "datasources")
+    check_uniq_name(config, "dashboards")
+    check_uniq_name(config, "folders")
+    check_uniq_name(config, "contacts")
+    check_uniq_name(config, "alerts")
+
+    print("Config OK.")
+
+def process_dashboard(dash, dashboard_dir='dashboards'):
+    db_path = os.path.join(dashboard_dir, '{}.json'.format(dash["name"]))
+
+    match dash["mode"]:
+        case "http":
+            db = requests.get(dash["url"])
+            with open(db_path, 'w') as f:
+                f.write(db.text)
+        case "local":
+            if dash.get("template"):
+                # This dashboard needs to be templated
+                template_file = db_path + ".j2"
+                if not os.path.exists(template_file):
+                    log_error(template_file + " does not exists.")
+                    exit(1)
+
+                with open(template_file, 'r') as f:
+                    template = Template(f.read())
+                    dash["json"] = template.render(dash=dash["template"])
+
+            elif not os.path.exists(db_path):
+                log_error(db_path + " does not exists.")
+                exit(1)
+    dash["path"] = db_path
+
+# Generate Terraform code using Jinja2
+def generate_terraform(config, template_dir='templates'):
+    env = Environment(loader=FileSystemLoader(template_dir),
+        trim_blocks=True, lstrip_blocks=True)
+
+    general_template = env.get_template('general.tf.j2')
+    datasource_template = env.get_template('datasource.tf.j2')
+    folder_template = env.get_template('folder.tf.j2')
+    dashboard_template = env.get_template('dashboard.tf.j2')
+    contact_template = env.get_template('contact.tf.j2')
+    alert_template = env.get_template('alerts.tf.j2')
+
+    output = []
+
+    grafana = config.get('grafana', {})
+    output.append(general_template.render(grafana=grafana))
+
+    for ds in config.get('datasources', []):
+        output.append(datasource_template.render(ds=ds))
+
+    for folder in config.get('folders', []):
+        output.append(folder_template.render(folder=folder))
+
+    for dash in config.get('dashboards', []):
+        process_dashboard(dash)
+        output.append(dashboard_template.render(dash=dash))
+
+    for contact in config.get('contacts', []):
+        output.append(contact_template.render(contact=contact))
+
+    for alert_group in config.get('alerts', []):
+        output.append(alert_template.render(group=alert_group))
+
+    return '\n'.join(output)
+
+# Main
+if __name__ == '__main__':
+    config_path = "config.yaml"
+    if len(sys.argv) > 1:
+        config_path = sys.argv[1]
+
+    config = load_config(config_path)
+    verify_config(config)
+    terraform_code = generate_terraform(config)
+
+    with open('generated.tf', 'w') as f:
+        f.write(terraform_code)
+
+    print("Terraform code written to 'generated.tf'")
