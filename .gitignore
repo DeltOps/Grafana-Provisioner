@@ -1,4 +1,8 @@
 generated.tf
 terraform.tfstate*
 dashboards/*.json
+config.yaml
+.terraform.lock.hcl
+.terraform
+
 
